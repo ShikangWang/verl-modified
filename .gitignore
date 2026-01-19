@@ -119,6 +119,10 @@ ENV/
 
 # data
 *.parquet
+data
+models
+*.json
+test*.py
 
 
 # local logs

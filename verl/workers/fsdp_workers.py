@@ -1611,6 +1611,7 @@ class RewardModelWorker(Worker, DistProfilerExtension):
 
         rm_input_ids = []
         rm_attention_mask = []
+        responses = []
 
         for i in range(data.batch.batch_size[0]):
             if not isinstance(data.non_tensor_batch["raw_prompt"][i], list | np.ndarray):
@@ -1633,6 +1634,7 @@ class RewardModelWorker(Worker, DistProfilerExtension):
             response = response.replace(src_tokenizer.eos_token, "")
 
             chat.append({"role": "assistant", "content": response})
+            responses.append(response)
 
             prompt_with_chat_template = target_tokenizer.apply_chat_template(
                 chat, add_generation_prompt=False, tokenize=False
@@ -1666,7 +1668,7 @@ class RewardModelWorker(Worker, DistProfilerExtension):
 
         rm_inputs = {"input_ids": rm_input_ids, "attention_mask": rm_attention_mask, "position_ids": rm_position_ids}
 
-        return DataProto.from_dict(rm_inputs)
+        return DataProto.from_dict(rm_inputs, non_tensors={"responses": responses})
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="reward"))
     @DistProfiler.annotate(color="brown")
@@ -1715,7 +1717,7 @@ class RewardModelWorker(Worker, DistProfilerExtension):
 
             token_level_scores = self._expand_to_token_level(data, scores)
             # Note that this is only the scores, may not be the final rewards used to train RL
-            output = DataProto.from_dict(tensors={"rm_scores": token_level_scores})
+            output = DataProto.from_dict(tensors={"rm_scores": token_level_scores}, non_tensors={"responses": rm_data.non_tensor_batch["responses"]})
 
         # https://pytorch.org/docs/stable/notes/fsdp.html#fsdp-notes
         # unshard the root FSDP module

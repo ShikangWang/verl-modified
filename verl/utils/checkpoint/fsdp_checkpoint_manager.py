@@ -122,12 +122,12 @@ class FSDPCheckpointManager(BaseCheckpointManager):
 
         # every rank download its own checkpoint
         state_dict_cfg = (
-            ShardedStateDictConfig(offload_to_cpu=True if is_cuda_available else False)
+            ShardedStateDictConfig(offload_to_cpu=False if is_cuda_available else False)
             if self.should_load_model
             else None
         )
         optim_cfg = (
-            ShardedOptimStateDictConfig(offload_to_cpu=True if is_cuda_available else False)
+            ShardedOptimStateDictConfig(offload_to_cpu=False if is_cuda_available else False)
             if self.should_load_optimizer
             else None
         )
@@ -135,7 +135,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             if self.should_load_model:
                 remote_model_path = os.path.join(local_path, f"model_world_size_{self.world_size}_rank_{self.rank}.pt")
                 local_model_path = copy_to_local(remote_model_path)
-                model_state_dict = torch.load(local_model_path, weights_only=False)
+                model_state_dict = torch.load(local_model_path, weights_only=False, map_location="cpu")
                 self.model.load_state_dict(model_state_dict)
                 log_with_rank(f"Loaded model from {remote_model_path}", rank=self.rank, logger=logger)
 
@@ -253,6 +253,14 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                     }
                     torch.save(extra_state_dict, extra_path)
                     log_with_rank(f"Saved extra_state to {os.path.abspath(extra_path)}", rank=self.rank, logger=logger)
+                if self.should_save_model:
+                    del model_state_dict
+                if self.should_save_optimizer:
+                    del optimizer_state_dict
+                if self.should_save_extra:
+                    del extra_state_dict
+                torch.cuda.empty_cache()
+                torch.distributed.barrier()
 
         if self.rank == 0:
             # Save HF tokenizer/processor and model config on rank 0 to huggingface/ directory, no matter whether
@@ -306,7 +314,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         if self.should_save_hf_model:
             # Only rank 0 will save hf model and,
             # offload to cpu to save LLMs which may be too large to fit in one GPU
-            state_dict = get_fsdp_full_state_dict(self.model, offload_to_cpu=True, rank0_only=True)
+            state_dict = get_fsdp_full_state_dict(self.model, offload_to_cpu=False, rank0_only=True)
 
             if self.rank == 0:
                 hf_local_path = os.path.join(local_path, "huggingface")

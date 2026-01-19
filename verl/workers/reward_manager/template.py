@@ -21,16 +21,52 @@ from verl import DataProto
 from verl.utils.reward_score import default_compute_score
 from verl.workers.reward_manager import register
 from verl.workers.reward_manager.abstract import AbstractRewardManager
-from sentence_transformers import SentenceTransformer
+from collections import Counter
+from nltk.util import ngrams
+import spacy
+from langdetect import detect, DetectorFactory, LangDetectException
+DetectorFactory.seed = 0
+from langdetect import detect_langs
+import re
 
+def pos_tag(text: str, nlp) -> str:
+    """返回空格分隔的POS序列"""
+    return " ".join([tok.pos_ for tok in nlp(text)])
 
-@register("naive")
-class NaiveRewardManager(AbstractRewardManager):
+def is_english_langdetect(text: str, min_confidence: float = 0.6) -> bool:
+    """
+    使用langdetect检测是否为英文
+    min_confidence: 最小置信度
+    """
+    if not text.strip():
+        return False
+    
+    # 清理文本
+    clean_text = re.sub(r'\s+', ' ', text.strip())
+    if len(clean_text) < 10:  # 太短的文本不可靠
+        return False
+    
+    # 检测语言
+    try :
+        languages = detect_langs(clean_text)
+    except LangDetectException:
+        print(f"Language detection failed. {text[:30]}...")
+        return False
+    
+    # 检查是否有英语
+    for lang in languages:
+        if lang.lang == 'en' and lang.prob >= min_confidence:
+            return True
+    
+    return False
+
+@register("template")
+class TemplateRewardManager(AbstractRewardManager):
     """The reward manager."""
 
     def __init__(self, tokenizer, num_examine, compute_score=None, reward_fn_key="data_source") -> None:
         """
-        Initialize the NaiveRewardManager instance.
+        Initialize the TemplateRewardManager instance.
 
         Args:
             tokenizer: The tokenizer used to decode token IDs into text.
@@ -43,7 +79,10 @@ class NaiveRewardManager(AbstractRewardManager):
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.compute_score = compute_score or default_compute_score
         self.reward_fn_key = reward_fn_key  # Store the key for accessing the data source
-        self.sentence_model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device='cuda' if torch.cuda.is_available() else 'cpu')
+        self.nlp = spacy.load("en_core_web_sm", disable=["ner", "parser", "lemmatizer"])
+        self.ngram_counter = Counter()
+        self.min_freq = 4  # 最小频次阈值
+        self.top_k = 100  # 只考虑前top_k高频模板
 
     def __call__(self, data: DataProto, return_dict: bool = False, beta=0.6) -> torch.Tensor | dict[str, Any]:
         """We will expand this function gradually based on the available datasets"""
@@ -54,27 +93,39 @@ class NaiveRewardManager(AbstractRewardManager):
                 reward_extra_keys = data.meta_info.get("reward_extra_keys", [])
                 reward_extra_info = {key: data.non_tensor_batch[key] for key in reward_extra_keys}
                 responses = data.non_tensor_batch["responses"]
+                responses_POS = [pos_tag(resp, self.nlp) for resp in responses]
                 original_rewards = data.batch["rm_scores"].sum(dim=-1).unsqueeze(-1) # B, 1
                 data.batch['src_rm_scores'] = data.batch['rm_scores'].clone()
 
-                # 计算多样性分数
-                with torch.no_grad():
-                    sentence_embeddings = self.sentence_model.encode(responses, batch_size=8, show_progress_bar=False, convert_to_tensor=True, normalize_embeddings=True)
-                    # cosine_scores = torch.cosine_similarity(sentence_embeddings.unsqueeze(1), sentence_embeddings.unsqueeze(0), dim=-1)
-                    cosine_scores = torch.mm(sentence_embeddings, sentence_embeddings.T)  # 计算余弦相似度矩阵
-                    mask = torch.eye(cosine_scores.size(0), device=cosine_scores.device).bool()
-                    cosine_scores.masked_fill_(mask, 0.0)  # 将对角线元素设为0，避免与自身比较
-                    cosine_scores = cosine_scores.sum(dim=-1) / (cosine_scores.size(0) - 1)  # 计算平均相似度
+                is_english = torch.tensor([is_english_langdetect(resp) for resp in responses], device=original_rewards.device).bool()
 
+                filtered = {tpl: c for tpl, c in self.ngram_counter.items() if c >= self.min_freq}
+                top = sorted(filtered.items(), key=lambda x: x[1], reverse=True)[:self.top_k]
+                top = set([" ".join(tpl) for tpl, _ in top])
+                # import pdb
+                # if len(top) > 0 :
+                #     pdb.set_trace()
+                template_cnt = [sum([t in resp for t in top]) for resp in responses_POS]
+                template_cnt = torch.tensor(template_cnt, device=original_rewards.device).float()
+                print(f"template_cnt: {template_cnt}")
+                #template_cnt越大，diversity_score越低
+                available_cnt = template_cnt[is_english]
+                if len(available_cnt) == 0:
+                    mean_cnt = 0.0
+                    std_cnt = 0.0
+                else:
+                    mean_cnt = available_cnt.float().mean()
+                    std_cnt = available_cnt.float().std()
+
+                # 确保约68%的样本在合理范围
+                alpha = 1.0 / (mean_cnt + std_cnt + 1e-8)
+                diversity_score = torch.exp(-alpha * template_cnt)
                 
-                diversity_score = 1 - cosine_scores  # 越不相似，多样性分数越高
+                diversity_score = diversity_score * 2 - 1
+                diversity_score[~is_english] = 0.0  # 非英文样本不计算多样性分数
+
                 data.batch["diversity_scores"] = diversity_score
-                # print(f"diversity_score: {diversity_score.squeeze(-1)}")
-                mean_diversity = diversity_score.mean().item()
-                std_diversity = diversity_score.std().item()
-                diversity_score = (diversity_score - mean_diversity) / (2 * std_diversity + 1e-8)
-                diversity_score = diversity_score.clip(-1.0, 1.0)
-                print(f"diversity_score: {diversity_score.squeeze(-1)[:10]}")
+                print(f"diversity_score: {diversity_score.squeeze(-1)}")
 
                 sign = torch.sign(original_rewards)
                 # 处理零值
@@ -83,6 +134,10 @@ class NaiveRewardManager(AbstractRewardManager):
                 diversity_factor = 1.0 + sign * beta * diversity_score
                 final_reward = original_rewards * diversity_factor
                 data.batch["rm_scores"] = final_reward
+
+                for i in range(len(responses_POS)):
+                    if is_english[i]:
+                        self.ngram_counter.update(ngrams(responses_POS[i].split(), 6))
 
                 # print(data.batch["rm_scores"].shape, data.batch["src_rm_scores"].shape)
                 # print(f"reward_tensor: {data.batch['rm_scores']}, reward_extra_info: {reward_extra_info}")

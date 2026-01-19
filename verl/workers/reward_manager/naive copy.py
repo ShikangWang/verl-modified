@@ -21,7 +21,6 @@ from verl import DataProto
 from verl.utils.reward_score import default_compute_score
 from verl.workers.reward_manager import register
 from verl.workers.reward_manager.abstract import AbstractRewardManager
-from sentence_transformers import SentenceTransformer
 
 
 @register("naive")
@@ -43,9 +42,8 @@ class NaiveRewardManager(AbstractRewardManager):
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.compute_score = compute_score or default_compute_score
         self.reward_fn_key = reward_fn_key  # Store the key for accessing the data source
-        self.sentence_model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device='cuda' if torch.cuda.is_available() else 'cpu')
 
-    def __call__(self, data: DataProto, return_dict: bool = False, beta=0.6) -> torch.Tensor | dict[str, Any]:
+    def __call__(self, data: DataProto, return_dict: bool = False) -> torch.Tensor | dict[str, Any]:
         """We will expand this function gradually based on the available datasets"""
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
@@ -53,39 +51,6 @@ class NaiveRewardManager(AbstractRewardManager):
             if return_dict:
                 reward_extra_keys = data.meta_info.get("reward_extra_keys", [])
                 reward_extra_info = {key: data.non_tensor_batch[key] for key in reward_extra_keys}
-                responses = data.non_tensor_batch["responses"]
-                original_rewards = data.batch["rm_scores"].sum(dim=-1).unsqueeze(-1) # B, 1
-                data.batch['src_rm_scores'] = data.batch['rm_scores'].clone()
-
-                # 计算多样性分数
-                with torch.no_grad():
-                    sentence_embeddings = self.sentence_model.encode(responses, batch_size=8, show_progress_bar=False, convert_to_tensor=True, normalize_embeddings=True)
-                    # cosine_scores = torch.cosine_similarity(sentence_embeddings.unsqueeze(1), sentence_embeddings.unsqueeze(0), dim=-1)
-                    cosine_scores = torch.mm(sentence_embeddings, sentence_embeddings.T)  # 计算余弦相似度矩阵
-                    mask = torch.eye(cosine_scores.size(0), device=cosine_scores.device).bool()
-                    cosine_scores.masked_fill_(mask, 0.0)  # 将对角线元素设为0，避免与自身比较
-                    cosine_scores = cosine_scores.sum(dim=-1) / (cosine_scores.size(0) - 1)  # 计算平均相似度
-
-                
-                diversity_score = 1 - cosine_scores  # 越不相似，多样性分数越高
-                data.batch["diversity_scores"] = diversity_score
-                # print(f"diversity_score: {diversity_score.squeeze(-1)}")
-                mean_diversity = diversity_score.mean().item()
-                std_diversity = diversity_score.std().item()
-                diversity_score = (diversity_score - mean_diversity) / (2 * std_diversity + 1e-8)
-                diversity_score = diversity_score.clip(-1.0, 1.0)
-                print(f"diversity_score: {diversity_score.squeeze(-1)[:10]}")
-
-                sign = torch.sign(original_rewards)
-                # 处理零值
-                sign[sign == 0] = 1.0  # 零reward当作正reward处理
-
-                diversity_factor = 1.0 + sign * beta * diversity_score
-                final_reward = original_rewards * diversity_factor
-                data.batch["rm_scores"] = final_reward
-
-                # print(data.batch["rm_scores"].shape, data.batch["src_rm_scores"].shape)
-                # print(f"reward_tensor: {data.batch['rm_scores']}, reward_extra_info: {reward_extra_info}")
                 return {"reward_tensor": data.batch["rm_scores"], "reward_extra_info": reward_extra_info}
             else:
                 return data.batch["rm_scores"]
