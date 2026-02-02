@@ -19,7 +19,7 @@ python3 -m verl.trainer.main_ppo \
     reward_model.model.input_tokenizer=/archive/workspace/eval/models/mistral_12b_sft \
     reward_model.model.path='/archive/workspace/eval/OpenRLHF/checkpoint/smo-family-v2-0.3-filter-1126' \
     reward_model.micro_batch_size_per_gpu=2 \
-    reward_model.reward_manager='template' \
+    reward_model.reward_manager='naive' \
     actor_rollout_ref.model.path=/archive/workspace/eval/models/mistral_12b_sft \
     actor_rollout_ref.model.use_shm=True \
     actor_rollout_ref.model.lora_rank=32 \

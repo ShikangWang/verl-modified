@@ -19,7 +19,7 @@ python3 -m verl.trainer.main_ppo \
     reward_model.model.input_tokenizer=/archive/workspace/eval/models/mistral_12b_sft \
     reward_model.model.path='/archive/workspace/eval/OpenRLHF/checkpoint/smo-family-v2-0.3-filter-1126' \
     reward_model.micro_batch_size_per_gpu=2 \
-    reward_model.reward_manager='template' \
+    reward_model.reward_manager='naive' \
     actor_rollout_ref.model.path=/archive/workspace/eval/models/mistral_12b_sft \
     actor_rollout_ref.model.use_shm=True \
     actor_rollout_ref.model.lora_rank=32 \
@@ -49,7 +49,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console", "wandb"]' \
     trainer.project_name='verl_grpo_example_gsm8k' \
-    trainer.experiment_name='mistral12b_sft_grpo_lora_20k_smo_pk_family_v2_template_0119' \
+    trainer.experiment_name='mistral12b_sft_grpo_lora_20k_smo_pk_family_v2_semantic_0126' \
     trainer.val_before_train=False \
     trainer.n_gpus_per_node=1 \
     trainer.nnodes=1 \

@@ -119,7 +119,7 @@ class TemplateRewardManager(AbstractRewardManager):
 
                 # 确保约68%的样本在合理范围
                 alpha = 1.0 / (mean_cnt + std_cnt + 1e-8)
-                diversity_score = torch.exp(-alpha * template_cnt)
+                diversity_score = torch.exp(-alpha * template_cnt).unsqueeze(-1) # Bx1
                 
                 diversity_score = diversity_score * 2 - 1
                 diversity_score[~is_english] = 0.0  # 非英文样本不计算多样性分数

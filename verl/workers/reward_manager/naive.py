@@ -45,7 +45,7 @@ class NaiveRewardManager(AbstractRewardManager):
         self.reward_fn_key = reward_fn_key  # Store the key for accessing the data source
         self.sentence_model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device='cuda' if torch.cuda.is_available() else 'cpu')
 
-    def __call__(self, data: DataProto, return_dict: bool = False, beta=0.6) -> torch.Tensor | dict[str, Any]:
+    def __call__(self, data: DataProto, return_dict: bool = False, beta=0.3) -> torch.Tensor | dict[str, Any]:
         """We will expand this function gradually based on the available datasets"""
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
@@ -68,6 +68,7 @@ class NaiveRewardManager(AbstractRewardManager):
 
                 
                 diversity_score = 1 - cosine_scores  # 越不相似，多样性分数越高
+                diversity_score = diversity_score.unsqueeze(-1)
                 data.batch["diversity_scores"] = diversity_score
                 # print(f"diversity_score: {diversity_score.squeeze(-1)}")
                 mean_diversity = diversity_score.mean().item()
@@ -82,7 +83,12 @@ class NaiveRewardManager(AbstractRewardManager):
 
                 diversity_factor = 1.0 + sign * beta * diversity_score
                 final_reward = original_rewards * diversity_factor
+                assert final_reward.shape[1] == 1
                 data.batch["rm_scores"] = final_reward
+
+                #方法二
+                # final_reward = torch.sigmoid(original_rewards) + diversity_score * beta
+                # data.batch["rm_scores"] = final_reward
 
                 # print(data.batch["rm_scores"].shape, data.batch["src_rm_scores"].shape)
                 # print(f"reward_tensor: {data.batch['rm_scores']}, reward_extra_info: {reward_extra_info}")
