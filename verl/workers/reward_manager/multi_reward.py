@@ -24,8 +24,8 @@ from verl.workers.reward_manager.abstract import AbstractRewardManager
 from sentence_transformers import SentenceTransformer
 
 
-@register("naive")
-class NaiveRewardManager(AbstractRewardManager):
+@register("multi")
+class MultiRewardManager(AbstractRewardManager):
     """The reward manager."""
 
     def __init__(self, tokenizer, num_examine, compute_score=None, reward_fn_key="data_source") -> None:
@@ -70,23 +70,9 @@ class NaiveRewardManager(AbstractRewardManager):
                 diversity_score = 1 - cosine_scores  # 越不相似，多样性分数越高
                 diversity_score = diversity_score.unsqueeze(-1)
                 data.batch["diversity_scores"] = diversity_score
-                # print(f"diversity_score: {diversity_score.squeeze(-1)}")
-                mean_diversity = diversity_score.mean().item()
-                std_diversity = diversity_score.std().item()
-                diversity_score = (diversity_score - mean_diversity) / (2 * std_diversity + 1e-8)
-                diversity_score = diversity_score.clip(-1.0, 1.0)
-                print(f"diversity_score: {diversity_score.squeeze(-1)[:10]}")
+                print(f"diversity_scores: {diversity_score.squeeze(-1)[:10]}")
 
-                sign = torch.sign(original_rewards)
-                # 处理零值
-                sign[sign == 0] = 1.0  # 零reward当作正reward处理
-
-                diversity_factor = 1.0 + sign * beta * diversity_score
-                final_reward = original_rewards * diversity_factor
-                assert final_reward.shape[1] == 1
-                data.batch["rm_scores"] = final_reward
-                # import pdb
-                # pdb.set_trace()
+                data.batch["rm_scores"] = original_rewards
 
                 #方法二
                 # final_reward = torch.sigmoid(original_rewards) + diversity_score * beta

@@ -57,7 +57,7 @@ from verl.utils.debug import marked_timer
 from verl.utils.metric import reduce_metrics
 from verl.utils.rollout_skip import RolloutSkip
 from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_unbalance
-from verl.utils.torch_functional import masked_mean
+from verl.utils.torch_functional import masked_mean, masked_whiten
 from verl.utils.tracking import ValidationGenerationsLogger
 
 
@@ -253,6 +253,37 @@ def compute_advantage(
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.GDPO:
+        ## only handle two reward now
+        rm_scores = data.batch['rm_scores']
+        diversity_scores = data.batch['diversity_scores']
+        beta=0.3
+
+        # shared variables
+        index = data.non_tensor_batch['uid']
+        responses = data.batch['responses']
+        response_length = responses.size(-1)
+        attention_mask = data.batch['attention_mask']
+        response_mask = attention_mask[:, -response_length:]
+
+        ## handle correctness first
+        rm_normalized_score, _ = core_algos.compute_gdpo_outcome_advantage(token_level_rewards=rm_scores,
+                                                                        response_mask=response_mask,
+                                                                        index=index)
+
+        ## handle format now
+        diversity_normalized_score, _ = core_algos.compute_gdpo_outcome_advantage(token_level_rewards=diversity_scores,
+                                                                        response_mask=response_mask,
+                                                                        index=index)
+
+        new_advantage = rm_normalized_score + diversity_normalized_score * beta
+        # import pdb
+        # pdb.set_trace()
+
+        advantages = masked_whiten(new_advantage, response_mask) * response_mask
+
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = advantages
     else:
         # handle all other adv estimator type other than GAE and GRPO
         adv_estimator_fn = core_algos.get_adv_estimator_fn(adv_estimator)
@@ -1037,7 +1068,7 @@ class RayPPOTrainer:
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(data=batch, reward_fn=self.reward_fn)
                         else:
-                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
+                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn) #此处为manager调用
 
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
